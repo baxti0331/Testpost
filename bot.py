@@ -2,24 +2,28 @@ import asyncio
 import datetime
 import json
 import os
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 )
 import aioschedule
+import pytz
 
-# Переменные окружения
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 PORT = int(os.getenv("PORT", "8443"))
-RENDER_HOST = os.getenv('RENDER_EXTERNAL_HOSTNAME')
+RENDER_HOST = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 CHAT_ID = int(os.getenv("CHAT_ID"))
 
 if not TOKEN or not RENDER_HOST or not CHAT_ID:
     raise ValueError("Нужно указать TELEGRAM_TOKEN, CHAT_ID и RENDER_EXTERNAL_HOSTNAME!")
 
 SCHEDULE_FILE = "schedule.json"
+MoscowTZ = pytz.timezone("Europe/Moscow")
 
-# Работа с расписанием
+# Состояния для диалога
+WAITING_TIME = 1
+
 def load_schedule():
     if not os.path.exists(SCHEDULE_FILE):
         return []
@@ -30,10 +34,18 @@ def save_schedule(times):
     with open(SCHEDULE_FILE, "w") as f:
         json.dump(times, f)
 
-# Автопостинг
+# Функция, чтобы перевести время МСК в UTC для aioschedule
+def schedule_time_msk_to_utc(time_str):
+    # time_str в формате "HH:MM"
+    now = datetime.datetime.now(tz=MoscowTZ)
+    hh, mm = map(int, time_str.split(":"))
+    dt_msk = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    dt_utc = dt_msk.astimezone(pytz.UTC)
+    return dt_utc.strftime("%H:%M")
+
 async def send_post(app):
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    await app.bot.send_message(CHAT_ID, f"🚀 Автопост {now}")
+    now_msk = datetime.datetime.now(MoscowTZ).strftime("%Y-%m-%d %H:%M:%S")
+    await app.bot.send_message(CHAT_ID, f"🚀 Автопост по МСК: {now_msk}")
 
 async def scheduler(app):
     while True:
@@ -44,65 +56,97 @@ def setup_schedule(app):
     aioschedule.clear()
     times = load_schedule()
     for t in times:
-        aioschedule.every().day.at(t).do(send_post, app)
+        utc_time = schedule_time_msk_to_utc(t)
+        aioschedule.every().day.at(utc_time).do(send_post, app)
 
-# Команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Бот запущен!\n"
-                                    "/addtime HH:MM - добавить время\n"
-                                    "/showtimes - показать расписание\n"
-                                    "/removetime HH:MM - удалить время")
+    keyboard = [
+        [InlineKeyboardButton("Добавить время", callback_data="add_time")],
+        [InlineKeyboardButton("Показать расписание", callback_data="show_times")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
 
-async def addtime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗ Используй формат: /addtime HH:MM")
-        return
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    time = context.args[0]
-    try:
-        datetime.datetime.strptime(time, "%H:%M")
+    if query.data == "add_time":
+        await query.message.reply_text("Введите время в формате ЧЧ:ММ (МСК):")
+        return WAITING_TIME
+
+    elif query.data == "show_times":
         times = load_schedule()
-        if time not in times:
-            times.append(time)
-            times.sort()
+        if not times:
+            await query.message.edit_text("Расписание пустое.")
+            return ConversationHandler.END
+        buttons = []
+        for t in times:
+            buttons.append([InlineKeyboardButton(f"Удалить {t}", callback_data=f"del_{t}")])
+        buttons.append([InlineKeyboardButton("Назад", callback_data="back")])
+        await query.message.edit_text("Текущее расписание:", reply_markup=InlineKeyboardMarkup(buttons))
+        return ConversationHandler.END
+
+    elif query.data.startswith("del_"):
+        t = query.data[4:]
+        times = load_schedule()
+        if t in times:
+            times.remove(t)
             save_schedule(times)
             setup_schedule(context.application)
-            await update.message.reply_text(f"Время {time} добавлено.")
+            await query.message.edit_text(f"Время {t} удалено.")
         else:
-            await update.message.reply_text("Это время уже есть.")
-    except:
-        await update.message.reply_text("❗ Неверный формат времени. Пример: /addtime 12:30")
+            await query.message.edit_text("Такого времени нет.")
+        return ConversationHandler.END
 
-async def showtimes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    elif query.data == "back":
+        keyboard = [
+            [InlineKeyboardButton("Добавить время", callback_data="add_time")],
+            [InlineKeyboardButton("Показать расписание", callback_data="show_times")]
+        ]
+        await query.message.edit_text("Управляй автопостингом через кнопки:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ConversationHandler.END
+
+async def time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        datetime.datetime.strptime(text, "%H:%M")
+    except ValueError:
+        await update.message.reply_text("❗ Неверный формат! Введите время в формате ЧЧ:ММ")
+        return WAITING_TIME
+
     times = load_schedule()
-    if times:
-        await update.message.reply_text("📅 Расписание:\n" + "\n".join(times))
-    else:
-        await update.message.reply_text("Расписание пустое.")
+    if text in times:
+        await update.message.reply_text("Это время уже есть в расписании.")
+        return ConversationHandler.END
 
-async def removetime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗ Используй формат: /removetime HH:MM")
-        return
+    times.append(text)
+    times.sort()
+    save_schedule(times)
+    setup_schedule(context.application)
+    await update.message.reply_text(f"Время {text} добавлено в расписание.")
+    return ConversationHandler.END
 
-    time = context.args[0]
-    times = load_schedule()
-    if time in times:
-        times.remove(time)
-        save_schedule(times)
-        setup_schedule(context.application)
-        await update.message.reply_text(f"Время {time} удалено.")
-    else:
-        await update.message.reply_text("Такого времени нет.")
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Операция отменена.")
+    return ConversationHandler.END
 
-# Основной запуск
 if __name__ == "__main__":
+    from telegram.ext import ConversationHandler
+
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("addtime", addtime))
-    app.add_handler(CommandHandler("showtimes", showtimes))
-    app.add_handler(CommandHandler("removetime", removetime))
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^(add_time|show_times|del_|back)"),
+                      CommandHandler("start", start)],
+        states={
+            WAITING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, time_input)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
+    )
+
+    app.add_handler(conv_handler)
 
     WEBHOOK_PATH = f"/{TOKEN}"
     WEBHOOK_URL = f"https://{RENDER_HOST}{WEBHOOK_PATH}"
