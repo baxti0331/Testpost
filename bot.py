@@ -25,9 +25,9 @@ print(f"Файл расписания будет использоваться п
 MoscowTZ = pytz.timezone("Europe/Moscow")
 WAITING_TIME = 1
 
-def load_schedule():
+def load_full_schedule():
     if not os.path.exists(SCHEDULE_FILE):
-        return []
+        return {"times": [], "repeat_interval": 0}
     try:
         with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -35,13 +35,13 @@ def load_schedule():
             return data
     except Exception as e:
         print(f"[ERROR] Не удалось загрузить расписание: {e}")
-        return []
+        return {"times": [], "repeat_interval": 0}
 
-def save_schedule(times):
+def save_full_schedule(data):
     try:
         with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-            json.dump(times, f, ensure_ascii=False, indent=2)
-        print(f"[INFO] Расписание сохранено: {times}")
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"[INFO] Расписание сохранено: {data}")
     except Exception as e:
         print(f"[ERROR] Не удалось сохранить расписание: {e}")
 
@@ -66,17 +66,29 @@ async def scheduler(app):
 
 def setup_schedule(app):
     aioschedule.clear()
-    times = load_schedule()
-    print(f"[DEBUG] Настраиваю расписание с временами: {times}")
+    data = load_full_schedule()
+    times = data.get("times", [])
+    repeat_interval = data.get("repeat_interval", 0)
+
+    print(f"[DEBUG] Настраиваю расписание: {times}, повтор: {repeat_interval} мин")
+
     for t in times:
         local_time = schedule_time_msk_to_local(t)
         print(f"[LOG] Запланирован автопост в локальное время сервера: {local_time} (МСК: {t})")
         aioschedule.every().day.at(local_time).do(send_post, app)
 
+    if repeat_interval > 0:
+        print(f"[LOG] Запланирован повторный автопост каждые {repeat_interval} минут")
+        aioschedule.every(repeat_interval).minutes.do(send_post, app)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Добавить время", callback_data="add_time")],
-        [InlineKeyboardButton("Показать расписание", callback_data="show_times")]
+        [InlineKeyboardButton("Показать расписание", callback_data="show_times")],
+        [InlineKeyboardButton("Повторять каждые 5 минут", callback_data="repeat_5")],
+        [InlineKeyboardButton("Повторять каждые 10 минут", callback_data="repeat_10")],
+        [InlineKeyboardButton("Повторять каждые 15 минут", callback_data="repeat_15")],
+        [InlineKeyboardButton("Отключить повторы", callback_data="repeat_0")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
@@ -90,33 +102,65 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_TIME
 
     elif query.data == "show_times":
-        times = load_schedule()
+        data = load_full_schedule()
+        times = data.get("times", [])
+        repeat_interval = data.get("repeat_interval", 0)
+
         if not times:
             await query.message.edit_text("Расписание пустое.")
             return ConversationHandler.END
+
         buttons = []
         for t in times:
             buttons.append([InlineKeyboardButton(f"Удалить {t}", callback_data=f"del_{t}")])
+
         buttons.append([InlineKeyboardButton("Назад", callback_data="back")])
-        await query.message.edit_text("Текущее расписание:", reply_markup=InlineKeyboardMarkup(buttons))
+
+        text = "Текущее расписание:\n" + "\n".join(times)
+        if repeat_interval > 0:
+            text += f"\n\n🔁 Повтор каждые {repeat_interval} минут"
+
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
         return ConversationHandler.END
 
     elif query.data.startswith("del_"):
         t = query.data[4:]
-        times = load_schedule()
+        data = load_full_schedule()
+        times = data.get("times", [])
+
         if t in times:
             times.remove(t)
-            save_schedule(times)
+            data["times"] = times
+            save_full_schedule(data)
             setup_schedule(context.application)
             await query.message.edit_text(f"Время {t} удалено.")
         else:
             await query.message.edit_text("Такого времени нет.")
         return ConversationHandler.END
 
+    elif query.data.startswith("repeat_"):
+        interval = int(query.data.split("_")[1])
+        data = load_full_schedule()
+        data["repeat_interval"] = interval
+        save_full_schedule(data)
+        setup_schedule(context.application)
+
+        if interval == 0:
+            msg = "🔁 Повторы отключены."
+        else:
+            msg = f"🔁 Теперь автопостинг повторяется каждые {interval} минут."
+
+        await query.message.edit_text(msg)
+        return ConversationHandler.END
+
     elif query.data == "back":
         keyboard = [
             [InlineKeyboardButton("Добавить время", callback_data="add_time")],
-            [InlineKeyboardButton("Показать расписание", callback_data="show_times")]
+            [InlineKeyboardButton("Показать расписание", callback_data="show_times")],
+            [InlineKeyboardButton("Повторять каждые 5 минут", callback_data="repeat_5")],
+            [InlineKeyboardButton("Повторять каждые 10 минут", callback_data="repeat_10")],
+            [InlineKeyboardButton("Повторять каждые 15 минут", callback_data="repeat_15")],
+            [InlineKeyboardButton("Отключить повторы", callback_data="repeat_0")]
         ]
         await query.message.edit_text("Управляй автопостингом через кнопки:", reply_markup=InlineKeyboardMarkup(keyboard))
         return ConversationHandler.END
@@ -129,7 +173,8 @@ async def time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗ Неверный формат! Введите время в формате ЧЧ:ММ")
         return WAITING_TIME
 
-    times = load_schedule()
+    data = load_full_schedule()
+    times = data.get("times", [])
 
     if text in times:
         await update.message.reply_text("Это время уже есть в расписании.")
@@ -137,7 +182,8 @@ async def time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     times.append(text)
     times.sort()
-    save_schedule(times)
+    data["times"] = times
+    save_full_schedule(data)
 
     setup_schedule(context.application)
 
@@ -149,12 +195,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 if __name__ == "__main__":
-    from telegram.ext import ConversationHandler
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler, pattern="^(add_time|show_times|del_|back)"),
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^(add_time|show_times|del_|back|repeat_)"),
                       CommandHandler("start", start)],
         states={
             WAITING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, time_input)],
