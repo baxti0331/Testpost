@@ -18,26 +18,37 @@ CHAT_ID = int(os.getenv("CHAT_ID"))
 if not TOKEN or not RENDER_HOST or not CHAT_ID:
     raise ValueError("Нужно указать TELEGRAM_TOKEN, CHAT_ID и RENDER_EXTERNAL_HOSTNAME!")
 
-SCHEDULE_FILE = "schedule.json"
-MoscowTZ = pytz.timezone("Europe/Moscow")
+# Абсолютный путь к файлу расписания
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SCHEDULE_FILE = os.path.join(BASE_DIR, "schedule.json")
+print(f"Файл расписания будет использоваться по пути: {SCHEDULE_FILE}")
 
+MoscowTZ = pytz.timezone("Europe/Moscow")
 WAITING_TIME = 1
 
 def load_schedule():
     if not os.path.exists(SCHEDULE_FILE):
         return []
-    with open(SCHEDULE_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            print(f"[INFO] Загружено расписание: {data}")
+            return data
+    except Exception as e:
+        print(f"[ERROR] Не удалось загрузить расписание: {e}")
+        return []
 
 def save_schedule(times):
-    with open(SCHEDULE_FILE, "w") as f:
-        json.dump(times, f)
+    try:
+        with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+            json.dump(times, f, ensure_ascii=False, indent=2)
+        print(f"[INFO] Расписание сохранено: {times}")
+    except Exception as e:
+        print(f"[ERROR] Не удалось сохранить расписание: {e}")
 
-# Локальный часовой пояс сервера
 LOCAL_TZ = datetime.datetime.now().astimezone().tzinfo
 
 def schedule_time_msk_to_local(time_str):
-    # time_str в формате "HH:MM"
     now = datetime.datetime.now(tz=MoscowTZ)
     hh, mm = map(int, time_str.split(":"))
     dt_msk = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -126,6 +137,7 @@ async def time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     times.append(text)
     times.sort()
     save_schedule(times)
+    print(f"[DEBUG] Добавлено время: {text}, текущее расписание: {times}")
     setup_schedule(context.application)
     await update.message.reply_text(f"Время {text} добавлено в расписание.")
     return ConversationHandler.END
