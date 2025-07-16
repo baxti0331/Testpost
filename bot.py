@@ -21,7 +21,6 @@ if not TOKEN or not RENDER_HOST or not CHAT_ID:
 SCHEDULE_FILE = "schedule.json"
 MoscowTZ = pytz.timezone("Europe/Moscow")
 
-# Состояния для диалога
 WAITING_TIME = 1
 
 def load_schedule():
@@ -34,17 +33,20 @@ def save_schedule(times):
     with open(SCHEDULE_FILE, "w") as f:
         json.dump(times, f)
 
-# Функция, чтобы перевести время МСК в UTC для aioschedule
-def schedule_time_msk_to_utc(time_str):
+# Локальный часовой пояс сервера
+LOCAL_TZ = datetime.datetime.now().astimezone().tzinfo
+
+def schedule_time_msk_to_local(time_str):
     # time_str в формате "HH:MM"
     now = datetime.datetime.now(tz=MoscowTZ)
     hh, mm = map(int, time_str.split(":"))
     dt_msk = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    dt_utc = dt_msk.astimezone(pytz.UTC)
-    return dt_utc.strftime("%H:%M")
+    dt_local = dt_msk.astimezone(LOCAL_TZ)
+    return dt_local.strftime("%H:%M")
 
 async def send_post(app):
     now_msk = datetime.datetime.now(MoscowTZ).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[LOG] Отправляю автопост по МСК: {now_msk}")
     await app.bot.send_message(CHAT_ID, f"🚀 Автопост по МСК: {now_msk}")
 
 async def scheduler(app):
@@ -56,8 +58,9 @@ def setup_schedule(app):
     aioschedule.clear()
     times = load_schedule()
     for t in times:
-        utc_time = schedule_time_msk_to_utc(t)
-        aioschedule.every().day.at(utc_time).do(send_post, app)
+        local_time = schedule_time_msk_to_local(t)
+        print(f"[LOG] Запланирован автопост в локальное время сервера: {local_time} (для МСК: {t})")
+        aioschedule.every().day.at(local_time).do(send_post, app)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
