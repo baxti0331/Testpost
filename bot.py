@@ -18,7 +18,6 @@ CHAT_ID = int(os.getenv("CHAT_ID"))
 if not TOKEN or not RENDER_HOST or not CHAT_ID:
     raise ValueError("Нужно указать TELEGRAM_TOKEN, CHAT_ID и RENDER_EXTERNAL_HOSTNAME!")
 
-# Абсолютный путь к файлу расписания
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEDULE_FILE = os.path.join(BASE_DIR, "schedule.json")
 print(f"Файл расписания будет использоваться по пути: {SCHEDULE_FILE}")
@@ -68,9 +67,10 @@ async def scheduler(app):
 def setup_schedule(app):
     aioschedule.clear()
     times = load_schedule()
+    print(f"[DEBUG] Настраиваю расписание с временами: {times}")
     for t in times:
         local_time = schedule_time_msk_to_local(t)
-        print(f"[LOG] Запланирован автопост в локальное время сервера: {local_time} (для МСК: {t})")
+        print(f"[LOG] Запланирован автопост в локальное время сервера: {local_time} (МСК: {t})")
         aioschedule.every().day.at(local_time).do(send_post, app)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -130,6 +130,7 @@ async def time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_TIME
 
     times = load_schedule()
+
     if text in times:
         await update.message.reply_text("Это время уже есть в расписании.")
         return ConversationHandler.END
@@ -137,8 +138,9 @@ async def time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     times.append(text)
     times.sort()
     save_schedule(times)
-    print(f"[DEBUG] Добавлено время: {text}, текущее расписание: {times}")
+
     setup_schedule(context.application)
+
     await update.message.reply_text(f"Время {text} добавлено в расписание.")
     return ConversationHandler.END
 
