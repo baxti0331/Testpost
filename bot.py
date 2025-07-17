@@ -24,7 +24,7 @@ WAITING_TARGET = 2
 
 def load_posts():
     if not os.path.exists(POSTS_FILE):
-        return {"posts": [], "repeat_interval": 0, "current_index": 0, "targets": []}
+        return {"posts": [], "repeat_interval": 0, "targets": []}
     with open(POSTS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -43,24 +43,23 @@ async def send_next_post(app):
         print("[INFO] Нет каналов или групп для отправки.")
         return
 
-    index = data.get("current_index", 0)
-    post = posts[index]
+    for post in posts:
+        for chat_id in targets:
+            try:
+                if post["type"] == "text":
+                    await app.bot.send_message(chat_id, post["content"])
+                elif post["type"] == "photo":
+                    await app.bot.send_photo(chat_id, post["file_id"], caption=post.get("caption", ""))
+                elif post["type"] == "video":
+                    await app.bot.send_video(chat_id, post["file_id"], caption=post.get("caption", ""))
+                elif post["type"] == "document":
+                    await app.bot.send_document(chat_id, post["file_id"], caption=post.get("caption", ""))
+            except Exception as e:
+                print(f"[ERROR] Не удалось отправить пост в {chat_id}: {e}")
 
-    for chat_id in targets:
-        try:
-            if post["type"] == "text":
-                await app.bot.send_message(chat_id, post["content"])
-            elif post["type"] == "photo":
-                await app.bot.send_photo(chat_id, post["file_id"], caption=post.get("caption", ""))
-            elif post["type"] == "video":
-                await app.bot.send_video(chat_id, post["file_id"], caption=post.get("caption", ""))
-            elif post["type"] == "document":
-                await app.bot.send_document(chat_id, post["file_id"], caption=post.get("caption", ""))
-        except Exception as e:
-            print(f"[ERROR] Не удалось отправить пост в {chat_id}: {e}")
-
-    data["current_index"] = (index + 1) % len(posts)
-    save_posts(data)
+    # Если хотите очищать очередь после рассылки — раскомментируйте строки ниже:
+    # data["posts"] = []
+    # save_posts(data)
 
 async def scheduler(app):
     while True:
@@ -138,7 +137,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "clear_queue":
         data["posts"] = []
-        data["current_index"] = 0
         save_posts(data)
         await query.message.edit_text("Очередь очищена.")
         return ConversationHandler.END
