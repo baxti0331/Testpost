@@ -76,6 +76,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
         return
+    await show_main_menu(update.message)
+
+async def show_main_menu(message):
     keyboard = [
         [InlineKeyboardButton("➕ Добавить пост", callback_data="add_post")],
         [InlineKeyboardButton("📋 Посмотреть очередь", callback_data="show_queue")],
@@ -88,11 +91,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("⏱ Интервал 10 мин", callback_data="interval_10")],
         [InlineKeyboardButton("⏱ Интервал 15 мин", callback_data="interval_15"),
          InlineKeyboardButton("⏱ Интервал 20 мин", callback_data="interval_20")],
-        [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")],
-        [InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
+    await message.reply_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -102,7 +104,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
-
     data = load_posts()
 
     if query.data == "add_post":
@@ -122,7 +123,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if post.get("caption"):
                 text += f" ({post['caption'][:30]})"
             text += "\n"
-        # Добавим кнопку назад
         keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.edit_text(text, reply_markup=reply_markup)
@@ -133,16 +133,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["current_index"] = 0
         save_posts(data)
         await query.message.edit_text("Очередь очищена.")
-        # Кнопка назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text("Вернуться в меню:", reply_markup=reply_markup)
         return ConversationHandler.END
 
     elif query.data == "add_target":
         await query.message.reply_text(
-            "Отправьте сюда ID канала/группы или @username (например, @mychannel) для добавления в список рассылки.\n"
-            "Чтобы узнать ID, можно добавить бота @userinfobot в канал/группу."
+            "Отправьте сюда ID канала/группы или @username для добавления в список рассылки."
         )
         return WAITING_TARGET
 
@@ -151,13 +146,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not targets:
             await query.message.edit_text("Список каналов и групп пуст.")
             return ConversationHandler.END
-        text = "Список каналов и групп для автопостинга:\n"
+
+        text = "Список каналов и групп для автопостинга:\n\n"
+        keyboard = []
+
         for idx, t in enumerate(targets):
             text += f"{idx+1}. {t}\n"
-        # Кнопка назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
+            keyboard.append([InlineKeyboardButton(f"❌ Удалить {t}", callback_data=f"delete_target|{t}")])
+
+        keyboard.append([InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")])
         reply_markup = InlineKeyboardMarkup(keyboard)
+
         await query.message.edit_text(text, reply_markup=reply_markup)
+        return ConversationHandler.END
+
+    elif query.data.startswith("delete_target|"):
+        _, target_to_delete = query.data.split("|", 1)
+        if target_to_delete in data.get("targets", []):
+            data["targets"].remove(target_to_delete)
+            save_posts(data)
+            await query.message.edit_text(f"✅ {target_to_delete} удалён из списка рассылки.")
+        else:
+            await query.message.edit_text("❗ Канал/группа не найдены в списке.")
         return ConversationHandler.END
 
     elif query.data.startswith("interval_"):
@@ -168,31 +178,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = "🚫 Автопостинг остановлен."
         else:
             msg = f"🔁 Автопостинг каждые {interval} минут."
-        # Кнопка назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.edit_text(msg, reply_markup=reply_markup)
+        await query.message.edit_text(msg)
         return ConversationHandler.END
 
     elif query.data == "back_to_menu":
-        # Просто вызываем стартовое меню
-        keyboard = [
-            [InlineKeyboardButton("➕ Добавить пост", callback_data="add_post")],
-            [InlineKeyboardButton("📋 Посмотреть очередь", callback_data="show_queue")],
-            [InlineKeyboardButton("🗑 Очистить очередь", callback_data="clear_queue")],
-            [InlineKeyboardButton("➕ Добавить канал/группу", callback_data="add_target")],
-            [InlineKeyboardButton("📋 Посмотреть каналы/группы", callback_data="show_targets")],
-            [InlineKeyboardButton("⏱ Интервал 1 мин", callback_data="interval_1"),
-             InlineKeyboardButton("⏱ Интервал 2 мин", callback_data="interval_2")],
-            [InlineKeyboardButton("⏱ Интервал 5 мин", callback_data="interval_5"),
-             InlineKeyboardButton("⏱ Интервал 10 мин", callback_data="interval_10")],
-            [InlineKeyboardButton("⏱ Интервал 15 мин", callback_data="interval_15"),
-             InlineKeyboardButton("⏱ Интервал 20 мин", callback_data="interval_20")],
-            [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")],
-            [InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.edit_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
+        await show_main_menu(query.message)
         return ConversationHandler.END
 
     return ConversationHandler.END
