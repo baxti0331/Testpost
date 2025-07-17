@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputMediaDocument
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
     CallbackQueryHandler, ConversationHandler, MessageHandler, filters
@@ -70,10 +70,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("➕ Добавить пост", callback_data="add_post")],
         [InlineKeyboardButton("📋 Посмотреть очередь", callback_data="show_queue")],
         [InlineKeyboardButton("🗑 Очистить очередь", callback_data="clear_queue")],
-        [InlineKeyboardButton("⏱ Интервал 5 мин", callback_data="interval_5")],
-        [InlineKeyboardButton("⏱ Интервал 10 мин", callback_data="interval_10")],
-        [InlineKeyboardButton("⏱ Интервал 15 мин", callback_data="interval_15")],
-        [InlineKeyboardButton("⏱ Интервал 20 мин", callback_data="interval_20")],
+        [InlineKeyboardButton("⏱ 1 мин", callback_data="interval_1"),
+         InlineKeyboardButton("⏱ 2 мин", callback_data="interval_2")],
+        [InlineKeyboardButton("⏱ 5 мин", callback_data="interval_5"),
+         InlineKeyboardButton("⏱ 10 мин", callback_data="interval_10")],
+        [InlineKeyboardButton("⏱ 15 мин", callback_data="interval_15"),
+         InlineKeyboardButton("⏱ 20 мин", callback_data="interval_20")],
         [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
