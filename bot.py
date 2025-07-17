@@ -10,19 +10,21 @@ from telegram.ext import (
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 PORT = int(os.getenv("PORT", "8443"))
 RENDER_HOST = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-
-if not TOKEN or not RENDER_HOST:
-    raise ValueError("Нужно указать TELEGRAM_TOKEN и RENDER_EXTERNAL_HOSTNAME!")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))  # Админ ID
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POSTS_FILE = os.path.join(BASE_DIR, "posts.json")
+CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
 
 WAITING_POST = 1
-WAITING_TARGET = 2
+WAITING_CHANNEL = 2
+
+def is_admin(user_id):
+    return user_id == ADMIN_ID
 
 def load_posts():
     if not os.path.exists(POSTS_FILE):
-        return {"posts": [], "repeat_interval": 0, "current_index": 0, "targets": []}
+        return {"posts": [], "repeat_interval": 0, "current_index": 0}
     with open(POSTS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -30,21 +32,28 @@ def save_posts(data):
     with open(POSTS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def load_channels():
+    if not os.path.exists(CHANNELS_FILE):
+        return []
+    with open(CHANNELS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_channels(channels):
+    with open(CHANNELS_FILE, "w", encoding="utf-8") as f:
+        json.dump(channels, f, ensure_ascii=False, indent=2)
+
 async def send_next_post(app):
     data = load_posts()
+    channels = load_channels()
     posts = data.get("posts", [])
-    targets = data.get("targets", [])
-    if not posts:
-        print("[INFO] Очередь пустая, ничего не отправляю.")
-        return
-    if not targets:
-        print("[INFO] Нет каналов или групп для отправки.")
+    if not posts or not channels:
+        print("[INFO] Очередь или список каналов пуст.")
         return
 
     index = data.get("current_index", 0)
     post = posts[index]
 
-    for chat_id in targets:
+    for chat_id in channels:
         try:
             if post["type"] == "text":
                 await app.bot.send_message(chat_id, post["content"])
@@ -55,7 +64,7 @@ async def send_next_post(app):
             elif post["type"] == "document":
                 await app.bot.send_document(chat_id, post["file_id"], caption=post.get("caption", ""))
         except Exception as e:
-            print(f"[ERROR] Не удалось отправить пост в {chat_id}: {e}")
+            print(f"[ERROR] Не удалось отправить в {chat_id}: {e}")
 
     data["current_index"] = (index + 1) % len(posts)
     save_posts(data)
@@ -71,123 +80,93 @@ async def scheduler(app):
             await asyncio.sleep(5)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ запрещён.")
+        return
+
     keyboard = [
         [InlineKeyboardButton("➕ Добавить пост", callback_data="add_post")],
         [InlineKeyboardButton("📋 Посмотреть очередь", callback_data="show_queue")],
         [InlineKeyboardButton("🗑 Очистить очередь", callback_data="clear_queue")],
-        [InlineKeyboardButton("➕ Добавить канал/группу", callback_data="add_target")],
-        [InlineKeyboardButton("📋 Посмотреть каналы/группы", callback_data="show_targets")],
+        [InlineKeyboardButton("➕ Добавить канал/группу", callback_data="add_channel")],
+        [InlineKeyboardButton("📺 Показать каналы", callback_data="show_channels")],
         [InlineKeyboardButton("⏱ Интервал 1 мин", callback_data="interval_1"),
-         InlineKeyboardButton("⏱ Интервал 2 мин", callback_data="interval_2")],
-        [InlineKeyboardButton("⏱ Интервал 5 мин", callback_data="interval_5"),
-         InlineKeyboardButton("⏱ Интервал 10 мин", callback_data="interval_10")],
-        [InlineKeyboardButton("⏱ Интервал 15 мин", callback_data="interval_15"),
-         InlineKeyboardButton("⏱ Интервал 20 мин", callback_data="interval_20")],
-        [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")],
-        [InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]
+         InlineKeyboardButton("⏱ 2 мин", callback_data="interval_2")],
+        [InlineKeyboardButton("⏱ 5 мин", callback_data="interval_5"),
+         InlineKeyboardButton("⏱ 10 мин", callback_data="interval_10")],
+        [InlineKeyboardButton("⏱ 15 мин", callback_data="interval_15"),
+         InlineKeyboardButton("⏱ 20 мин", callback_data="interval_20")],
+        [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    user_id = query.from_user.id
 
+    if not is_admin(user_id):
+        await query.answer("⛔ Доступ запрещён.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
     data = load_posts()
+    channels = load_channels()
 
     if query.data == "add_post":
-        await query.message.reply_text("Отправьте мне сообщение, фото, видео или документ для добавления в очередь:")
+        await query.message.edit_text("Отправьте мне сообщение, фото, видео или документ для добавления в очередь.\n\n🔙 /back — Назад")
         return WAITING_POST
 
     elif query.data == "show_queue":
         posts = data.get("posts", [])
-        if not posts:
-            await query.message.edit_text("Очередь пуста.")
-            return ConversationHandler.END
         text = "Очередь постов:\n"
-        for idx, post in enumerate(posts):
-            text += f"{idx+1}. {post['type'].capitalize()}"
-            if post["type"] == "text":
-                text += f": {post['content'][:30]}"
-            if post.get("caption"):
-                text += f" ({post['caption'][:30]})"
-            text += "\n"
-        # Добавим кнопку назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.edit_text(text, reply_markup=reply_markup)
+        if not posts:
+            text += "Очередь пуста."
+        else:
+            for idx, post in enumerate(posts):
+                text += f"{idx+1}. {post['type'].capitalize()}"
+                if post["type"] == "text":
+                    text += f": {post['content'][:30]}"
+                if post.get("caption"):
+                    text += f" ({post['caption'][:30]})"
+                text += "\n"
+        await query.message.edit_text(text + "\n\n🔙 /back — Назад")
         return ConversationHandler.END
 
     elif query.data == "clear_queue":
         data["posts"] = []
         data["current_index"] = 0
         save_posts(data)
-        await query.message.edit_text("Очередь очищена.")
-        # Кнопка назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text("Вернуться в меню:", reply_markup=reply_markup)
-        return ConversationHandler.END
-
-    elif query.data == "add_target":
-        await query.message.reply_text(
-            "Отправьте сюда ID канала/группы или @username (например, @mychannel) для добавления в список рассылки.\n"
-            "Чтобы узнать ID, можно добавить бота @userinfobot в канал/группу."
-        )
-        return WAITING_TARGET
-
-    elif query.data == "show_targets":
-        targets = data.get("targets", [])
-        if not targets:
-            await query.message.edit_text("Список каналов и групп пуст.")
-            return ConversationHandler.END
-        text = "Список каналов и групп для автопостинга:\n"
-        for idx, t in enumerate(targets):
-            text += f"{idx+1}. {t}\n"
-        # Кнопка назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.edit_text(text, reply_markup=reply_markup)
+        await query.message.edit_text("Очередь очищена.\n\n🔙 /back — Назад")
         return ConversationHandler.END
 
     elif query.data.startswith("interval_"):
         interval = int(query.data.split("_")[1])
         data["repeat_interval"] = interval
         save_posts(data)
-        if interval == 0:
-            msg = "🚫 Автопостинг остановлен."
-        else:
-            msg = f"🔁 Автопостинг каждые {interval} минут."
-        # Кнопка назад
-        keyboard = [[InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.edit_text(msg, reply_markup=reply_markup)
+        msg = "🚫 Автопостинг остановлен." if interval == 0 else f"🔁 Автопостинг каждые {interval} минут."
+        await query.message.edit_text(msg + "\n\n🔙 /back — Назад")
         return ConversationHandler.END
 
-    elif query.data == "back_to_menu":
-        # Просто вызываем стартовое меню
-        keyboard = [
-            [InlineKeyboardButton("➕ Добавить пост", callback_data="add_post")],
-            [InlineKeyboardButton("📋 Посмотреть очередь", callback_data="show_queue")],
-            [InlineKeyboardButton("🗑 Очистить очередь", callback_data="clear_queue")],
-            [InlineKeyboardButton("➕ Добавить канал/группу", callback_data="add_target")],
-            [InlineKeyboardButton("📋 Посмотреть каналы/группы", callback_data="show_targets")],
-            [InlineKeyboardButton("⏱ Интервал 1 мин", callback_data="interval_1"),
-             InlineKeyboardButton("⏱ Интервал 2 мин", callback_data="interval_2")],
-            [InlineKeyboardButton("⏱ Интервал 5 мин", callback_data="interval_5"),
-             InlineKeyboardButton("⏱ Интервал 10 мин", callback_data="interval_10")],
-            [InlineKeyboardButton("⏱ Интервал 15 мин", callback_data="interval_15"),
-             InlineKeyboardButton("⏱ Интервал 20 мин", callback_data="interval_20")],
-            [InlineKeyboardButton("🚫 Остановить повторы", callback_data="interval_0")],
-            [InlineKeyboardButton("↩ Назад", callback_data="back_to_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.edit_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
+    elif query.data == "add_channel":
+        await query.message.edit_text("Отправь ID канала/группы (например: -1001234567890)\n\n🔙 /back — Назад")
+        return WAITING_CHANNEL
+
+    elif query.data == "show_channels":
+        if not channels:
+            text = "Список каналов пуст."
+        else:
+            text = "Каналы/группы для постинга:\n" + "\n".join(str(c) for c in channels)
+        await query.message.edit_text(text + "\n\n🔙 /back — Назад")
         return ConversationHandler.END
 
     return ConversationHandler.END
 
 async def post_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ запрещён.")
+        return ConversationHandler.END
+
     data = load_posts()
     posts = data.get("posts", [])
 
@@ -209,32 +188,32 @@ async def post_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["posts"] = posts
     save_posts(data)
 
-    await update.message.reply_text("Пост добавлен в очередь.")
+    await update.message.reply_text("✅ Пост добавлен в очередь.\n\n🔙 /back — Назад")
     return ConversationHandler.END
 
-async def target_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load_posts()
-    targets = data.get("targets", [])
-
-    target = update.message.text.strip()
-    if not target:
-        await update.message.reply_text("❗ Пустое сообщение, попробуйте ещё раз.")
-        return WAITING_TARGET
-
-    if target in targets:
-        await update.message.reply_text("Этот канал или группа уже в списке.")
+async def channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ запрещён.")
         return ConversationHandler.END
 
-    targets.append(target)
-    data["targets"] = targets
-    save_posts(data)
+    text = update.message.text.strip()
+    channels = load_channels()
 
-    await update.message.reply_text(f"Добавлено в список рассылки: {target}")
+    try:
+        channel_id = int(text)
+        if channel_id not in channels:
+            channels.append(channel_id)
+            save_channels(channels)
+            await update.message.reply_text(f"✅ Канал {channel_id} добавлен.\n\n🔙 /back — Назад")
+        else:
+            await update.message.reply_text("⚠️ Канал уже в списке.\n\n🔙 /back — Назад")
+    except:
+        await update.message.reply_text("❗ Неверный формат ID.\n\n🔙 /back — Назад")
+
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Операция отменена.")
-    return ConversationHandler.END
+async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await start(update, context)
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
@@ -244,9 +223,9 @@ if __name__ == "__main__":
                       CommandHandler("start", start)],
         states={
             WAITING_POST: [MessageHandler(filters.ALL & ~filters.COMMAND, post_input)],
-            WAITING_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, target_input)],
+            WAITING_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, channel_input)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("back", back)],
         allow_reentry=True,
     )
 
