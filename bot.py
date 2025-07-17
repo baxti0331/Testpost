@@ -10,9 +10,11 @@ from telegram.ext import (
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 PORT = int(os.getenv("PORT", "8443"))
 RENDER_HOST = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 if not TOKEN or not RENDER_HOST:
     raise ValueError("Нужно указать TELEGRAM_TOKEN и RENDER_EXTERNAL_HOSTNAME!")
+if not ADMIN_ID:
+    raise ValueError("Нужно указать ADMIN_ID!")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POSTS_FILE = os.path.join(BASE_DIR, "posts.json")
@@ -71,6 +73,9 @@ async def scheduler(app):
             await asyncio.sleep(5)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return
     keyboard = [
         [InlineKeyboardButton("➕ Добавить пост", callback_data="add_post")],
         [InlineKeyboardButton("📋 Посмотреть очередь", callback_data="show_queue")],
@@ -90,6 +95,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Управляй автопостингом через кнопки:", reply_markup=reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.callback_query.answer("Доступ запрещён", show_alert=True)
+        return ConversationHandler.END
+
     query = update.callback_query
     await query.answer()
 
@@ -188,6 +198,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def post_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return ConversationHandler.END
+
     data = load_posts()
     posts = data.get("posts", [])
 
@@ -213,6 +227,10 @@ async def post_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def target_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return ConversationHandler.END
+
     data = load_posts()
     targets = data.get("targets", [])
 
@@ -233,6 +251,9 @@ async def target_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return ConversationHandler.END
     await update.message.reply_text("Операция отменена.")
     return ConversationHandler.END
 
