@@ -75,7 +75,15 @@ async def scheduler(app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
-        return
+        await update.message.reply_animation(
+            animation="https://system365.pro/wp-content/uploads/2020/11/funkygoose-13.gif",
+            caption=(
+                "🔒 Упс! К сожалению, у тебя нет доступа к этому боту.\n\n"
+                "Если нужен доступ или есть вопросы — пиши сюда: @baxti_pm"
+            )
+        )
+        return ConversationHandler.END
+
     await show_main_menu(update.message)
 
 async def show_main_menu(message):
@@ -99,7 +107,7 @@ async def show_main_menu(message):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
-        await update.callback_query.answer("Доступ запрещён", show_alert=True)
+        await update.callback_query.answer("🔒 Доступ запрещён.\nНапиши @baxti_pm, если нужен доступ.", show_alert=True)
         return ConversationHandler.END
 
     query = update.callback_query
