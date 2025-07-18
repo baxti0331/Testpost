@@ -16,6 +16,11 @@ DB_URL = os.getenv("DATABASE_URL")
 WAITING_POST = 1
 WAITING_TARGET = 2
 
+# Кнопка назад
+def back_button_keyboard():
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]]
+    return InlineKeyboardMarkup(keyboard)
+
 # Работа с БД
 async def get_pool():
     return await asyncpg.create_pool(dsn=DB_URL)
@@ -119,7 +124,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     if query.data == "add_post":
-        await query.message.reply_text("Отправьте пост (текст/фото/видео/документ):")
+        await query.message.reply_text(
+            "Отправьте пост (текст/фото/видео/документ):",
+            reply_markup=back_button_keyboard()
+        )
         return WAITING_POST
 
     elif query.data == "show_queue":
@@ -145,7 +153,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     elif query.data == "add_target":
-        await query.message.reply_text("Отправь ID канала/группы или @username:")
+        await query.message.reply_text(
+            "Отправь ID канала/группы или @username:",
+            reply_markup=back_button_keyboard()
+        )
         return WAITING_TARGET
 
     elif query.data == "show_targets":
@@ -164,6 +175,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await pool.execute("UPDATE settings SET repeat_interval=$1 WHERE id=1", interval)
         msg = "🚫 Автопостинг остановлен." if interval == 0 else f"🔁 Автопостинг каждые {interval} минут."
         await query.message.edit_text(msg)
+        return ConversationHandler.END
+
+    elif query.data == "back_to_menu":
+        await show_main_menu(query.message)
         return ConversationHandler.END
 
     return ConversationHandler.END
